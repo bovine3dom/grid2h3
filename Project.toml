@@ -1,6 +1,7 @@
 [deps]
 CSV = "336ed68f-0bac-5ca0-87d4-7b16caf5d00b"
 DataFrames = "a93c6f00-e57d-5684-b7b6-d8193f3e46c0"
+DuckDB = "d2f5444f-75bc-4fdf-ac35-56f514c445e1"
 H3 = "f62fece2-b996-571a-b4c9-e662aba1c617"
 Proj = "c94c279d-25a6-4763-9509-64d165bea63e"
 RollingFunctions = "b0e4dd01-7b14-53d8-9b45-175a3e362653"

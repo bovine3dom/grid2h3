@@ -2,7 +2,7 @@
 
 julia_version = "1.9.4"
 manifest_format = "2.0"
-project_hash = "690dd3da855dcfd1765869c0b85f4c02307aaa51"
+project_hash = "2eb0921973489900af326bfce2f13dbc5d298718"
 
 [[deps.Accessors]]
 deps = ["CompositionsBase", "ConstructionBase", "Dates", "InverseFunctions", "LinearAlgebra", "MacroTools", "Markdown", "Test"]
@@ -210,6 +210,11 @@ git-tree-sha1 = "f9f4947bc76066221a9308faff2cd2af9287ae56"
 uuid = "75c7ada1-017a-5fb6-b8c7-2125ff2d6c93"
 version = "1.2.6"
 
+[[deps.DBInterface]]
+git-tree-sha1 = "a444404b3f94deaa43ca2a58e18153a82695282b"
+uuid = "a10d1c49-ce27-4219-8d33-6db1a4562965"
+version = "2.6.1"
+
 [[deps.DataAPI]]
 git-tree-sha1 = "abe83f3a2f1b857aac70ef8b269080af17764bbe"
 uuid = "9a962f9c-6df0-11e9-0e5d-c546b8b5ee8a"
@@ -256,6 +261,18 @@ deps = ["ArgTools", "FileWatching", "LibCURL", "NetworkOptions"]
 uuid = "f43a241f-c20a-4ad4-852c-f6b1247861c6"
 version = "1.6.0"
 
+[[deps.DuckDB]]
+deps = ["DBInterface", "Dates", "DuckDB_jll", "FixedPointDecimals", "Tables", "UUIDs", "WeakRefStrings"]
+git-tree-sha1 = "dc1fd531149c0aacefe280d1b9756d3e6c6ac3cf"
+uuid = "d2f5444f-75bc-4fdf-ac35-56f514c445e1"
+version = "1.0.0"
+
+[[deps.DuckDB_jll]]
+deps = ["Artifacts", "JLLWrappers", "Libdl"]
+git-tree-sha1 = "9858c927af2f906ac3740ab366b999c7894283f9"
+uuid = "2cbbab25-fc8b-58cf-88d4-687a02676033"
+version = "1.0.0+0"
+
 [[deps.EarCut_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl", "Pkg"]
 git-tree-sha1 = "e3290f2d49e661fbd94046d7e3726ffcb2d41053"
@@ -281,6 +298,12 @@ version = "0.9.21"
 
 [[deps.FileWatching]]
 uuid = "7b1f6079-737a-58dc-b8bc-7a2ca5c1b5ee"
+
+[[deps.FixedPointDecimals]]
+deps = ["Parsers"]
+git-tree-sha1 = "cd96db4ebe96ee1063ee1deddef318c6d5844cff"
+uuid = "fb4d412d-6eee-574d-9565-ede6634db7b0"
+version = "0.5.2"
 
 [[deps.FixedPointNumbers]]
 deps = ["Statistics"]

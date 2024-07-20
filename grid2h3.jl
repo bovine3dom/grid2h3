@@ -30,9 +30,9 @@ df.midpoint = ThreadsX.map(ps -> points2mid(point2latlon.(ps)), getfield.(df[!, 
 
 stripe_number = 2
 stripe_size = 300_000
-df3 = df[df.CNTR_ID .== "UK", :]
+df3 = df#[df.CNTR_ID .== "UK", :]
 #mini_df = copy(df[end-(stripe_size*stripe_number):end-((stripe_number-1)*stripe_size), [:midpoint, :TOT_P_2018, :OBJECTID]]) # 300_000 is hard for computer :(
-mini_df = copy(df3[!, [:midpoint, :TOT_P_2018, :OBJECTID]]) 
+mini_df = copy(df3[!, [:midpoint, :TOT_P_2018, :OBJECTID, :CNTR_ID]]) 
 
 # resolution 9: at distance 2 it covers about 2km^2
 rings = mapreduce(k -> map(midpoint -> (OBJECTID=midpoint[2], h3=kRing(geoToH3(GeoCoord(deg2rad.(midpoint[1])...), 9), k), dist=k+1), zip(mini_df.midpoint, mini_df.OBJECTID)), vcat, 0:2) |> DataFrame
@@ -45,27 +45,44 @@ rings = flatten(rings, :h3)
 
 # sort!(rings, :dist) # comes presorted
 rings = rings[.!nonunique(rings, [:h3, :OBJECTID], keep=:first), :]
-leftjoin!(rings, mini_df[!, [:TOT_P_2018, :OBJECTID]], on=:OBJECTID)
+leftjoin!(rings, mini_df[!, [:TOT_P_2018, :OBJECTID, :CNTR_ID]], on=:OBJECTID)
 
 # weighted average with centre = 1, nthring = 1/dist^3
-df2 = combine(groupby(rings, :h3), [:dist, :TOT_P_2018] => ((d, p) -> mean(p, weights(1 ./ (d.^3)))) => :TOT_P_2018)
+df2 = combine(groupby(rings, :h3), [:dist, :TOT_P_2018] => ((d, p) -> mean(p, weights(1 ./ (d.^3)))) => :TOT_P_2018, :CNTR_ID => first => :CNTR_ID)
 
+df2.res .= 9
+df2.h3_7 = h3ToParent.(df2.h3, 7)
+df2.h3_5 = h3ToParent.(df2.h3, 5)
+
+h3_7s = combine(groupby(df2, :h3_7), :TOT_P_2018 => mean => :TOT_P_2018, :res => (x->7) => :res, :CNTR_ID => first => :CNTR_ID)
+rename!(h3_7s, :h3_7 => :h3)
+h3_5s = combine(groupby(df2, :h3_5), :TOT_P_2018 => mean => :TOT_P_2018, :res => (x->5) => :res, :CNTR_ID => first => :CNTR_ID)
+rename!(h3_5s, :h3_5 => :h3)
+
+df4 = vcat(df2[!, [:h3, :TOT_P_2018, :res, :CNTR_ID]], h3_7s, h3_5s)
 
 
 # gridding ends, this is just for fun / plotting
 
 
-df2.index = string.(df2.h3, base=16)
-# addquantiles!(df2, :TOT_P_2018)
-# df2.value = df2.TOT_P_2018_quantile
-# CSV.write("$(homedir())/projects/H3-MON/www/data/h3_data.csv", df2[!, [:index, :value]])
+df4.index = string.(df4.h3, base=16)
+# addquantiles!(df4, :TOT_P_2018)
+# df4.value = df4.TOT_P_2018_quantile
+# CSV.write("$(homedir())/projects/H3-MON/www/data/h3_data.csv", df4[!, [:index, :value]])
 
 # but those are quantiles based on land, to be based on people we need cumsum
-sort!(df2, :TOT_P_2018)
-df2.pop_quantile = cumsum(df2.TOT_P_2018) ./ sum(df2.TOT_P_2018)
-df2.value = df2.pop_quantile
-df2.real_value = df2.TOT_P_2018
-CSV.write("$(homedir())/projects/H3-MON/www/data/h3_data.csv", df2[!, [:index, :value, :real_value]])
+sort!(df4, :TOT_P_2018)
+df4.pop_quantile = cumsum(df4.TOT_P_2018) ./ sum(df4.TOT_P_2018)
+# df4.value = df4.pop_quantile
+# df4.real_value = df4.TOT_P_2018
+# CSV.write("$(homedir())/projects/H3-MON/www/data/h3_data.csv", df4[!, [:index, :value, :real_value]]) # could cut off e.g. everything below 5th percentile density to massively reduce file size without losing too much info
+
+using DuckDB
+# COPY orders TO 'orders' (FORMAT PARQUET, PARTITION_BY (year, month));
+con = DBInterface.connect(DuckDB.DB)
+DuckDB.register_data_frame(con, df4, "df4")
+results = DBInterface.execute(con, "SELECT count(*) FROM df4")
+results = DBInterface.execute(con, "COPY df4 TO 'JRC_POPULATION_2018_H3' (FORMAT PARQUET, PARTITION_BY (res, CNTR_ID))")
 
 # do i need this?
 function densityatquantile(q,poptuple)
