@@ -1,5 +1,5 @@
 using Shapefile, DataFrames, Statistics, RollingFunctions, Proj, ThreadsX, StatsBase, CSV
-import H3.API: kRing, geoToH3, GeoCoord
+import H3.API: kRing, geoToH3, GeoCoord, h3ToParent
 
 
 "Add [column]_quantile to a dataframe"
@@ -73,16 +73,39 @@ df4.index = string.(df4.h3, base=16)
 # but those are quantiles based on land, to be based on people we need cumsum
 sort!(df4, :TOT_P_2018)
 df4.pop_quantile = cumsum(df4.TOT_P_2018) ./ sum(df4.TOT_P_2018)
-# df4.value = df4.pop_quantile
-# df4.real_value = df4.TOT_P_2018
+df4.value = df4.pop_quantile
+df4.real_value = df4.TOT_P_2018
 # CSV.write("$(homedir())/projects/H3-MON/www/data/h3_data.csv", df4[!, [:index, :value, :real_value]]) # could cut off e.g. everything below 5th percentile density to massively reduce file size without losing too much info
 
-using DuckDB
-# COPY orders TO 'orders' (FORMAT PARQUET, PARTITION_BY (year, month));
-con = DBInterface.connect(DuckDB.DB)
-DuckDB.register_data_frame(con, df4, "df4")
-results = DBInterface.execute(con, "SELECT count(*) FROM df4")
-results = DBInterface.execute(con, "COPY df4 TO 'JRC_POPULATION_2018_H3' (FORMAT PARQUET, PARTITION_BY (res, CNTR_ID))")
+# using DuckDB
+# # COPY orders TO 'orders' (FORMAT PARQUET, PARTITION_BY (year, month));
+# con = DBInterface.connect(DuckDB.DB)
+# DuckDB.register_data_frame(con, df4, "df4")
+# # results = DBInterface.execute(con, "SELECT count(*) FROM df4")
+# diditwork = DBInterface.execute(con, "COPY df4 TO 'JRC_POPULATION_2018_H3' (FORMAT PARQUET, PARTITION_BY (res, CNTR_ID))")
+
+# using DuckDB, DataFrames
+# df4 = DBInterface.execute(con, "SELECT * from '../H3-MON/www/data/JRC_POPULATION_2018_H3/**/*.parquet'") |> DataFrame
+
+using ArrowHivePartitioner
+using Arrow, DataFrames
+df4.res = string.(df4.res)
+writehivedir("JRC_POPULATION_2018_H3", df4, [:res, :CNTR_ID])
+
+df4 = readhivedir("../H3-MON/www/data/JRC_POPULATION_2018_H3")
+select!(df4, [:index, :value, :real_value, :res, :CNTR_ID])
+
+# arquero doesn't support zstd
+function writehivedir(outdir, df, groupkeys=[]; filename="part0.arrow")
+    g = groupby(df, groupkeys)
+    for t in keys(g)
+        !all(v -> >:(AbstractString, typeof(v)), values(t)) && throw("All grouped column values must be strings") # TODO: support other types?
+        path = join(["$k=$v" for (k,v) in zip(keys(t), values(t))], "/")
+        mkpath(joinpath(outdir,path))
+        Arrow.write(joinpath(outdir,path,filename), g[t][!, Not(keys(t))])
+    end
+end
+writehivedir("../H3-MON/www/data/JRC_POPULATION_2018_H3", df4, [:res, :CNTR_ID])
 
 # do i need this?
 function densityatquantile(q,poptuple)
