@@ -94,6 +94,7 @@ writehivedir("JRC_POPULATION_2018_H3", df4, [:res, :CNTR_ID])
 
 df4 = readhivedir("../H3-MON/www/data/JRC_POPULATION_2018_H3")
 select!(df4, [:index, :value, :real_value, :res, :CNTR_ID])
+df4.h3_3 = string.(h3ToParent.(parse.(UInt64, df4.index, base=16), 3), base=16)
 
 # arquero doesn't support zstd
 function writehivedir(outdir, df, groupkeys=[]; filename="part0.arrow")
@@ -106,6 +107,7 @@ function writehivedir(outdir, df, groupkeys=[]; filename="part0.arrow")
     end
 end
 writehivedir("../H3-MON/www/data/JRC_POPULATION_2018_H3", df4, [:res, :CNTR_ID])
+writehivedir("../H3-MON/www/data/JRC_POPULATION_2018_H3_by_rnd", df4, [:res, :h3_3])
 
 # do i need this?
 function densityatquantile(q,poptuple)
