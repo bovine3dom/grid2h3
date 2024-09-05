@@ -117,3 +117,13 @@ function densityatquantile(q,poptuple)
     quantileth_density(q) = populations[findfirst(x->x>quantileth_man(q), cum_population)]
     quantileth_density(q)
 end
+
+
+# get valid parents to avoid 404
+df4 = readhivedir("../H3-MON/www/data/JRC_POPULATION_2018_H3_by_rnd")
+
+using JSON
+dfo = combine(groupby(df4, :res), df -> begin
+        Ref(unique(df.h3_3))
+    end)
+write("../H3-MON/www/data/JRC_POPULATION_2018_H3_by_rnd/meta.json", JSON.json(Dict("valid_parents" => Dict(eachrow(dfo)))))
