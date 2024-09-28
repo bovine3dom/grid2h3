@@ -1,4 +1,5 @@
 using Shapefile, DataFrames, Statistics, RollingFunctions, Proj, ThreadsX, StatsBase, CSV
+import H3
 import H3.API: kRing, geoToH3, GeoCoord, h3ToParent
 
 
@@ -126,4 +127,99 @@ using JSON
 dfo = combine(groupby(df4, :res), df -> begin
         Ref(unique(df.h3_3))
     end)
+
+# want to aim for ~30 per region
+# find that (it will be constant right? kRing of radius n has constant size. 
+#   so i guess what we need to know is what distance we will be viewing at
+#   and from that find the radius in km of the disk
+#   to then find the radius in h3 tiles @ what h3 resolution is ~approx 30
+# )
+# do line :38 again
+# then store in metadata with "chunk_size" => (res => [parent res, radius])
 write("../H3-MON/www/data/JRC_POPULATION_2018_H3_by_rnd/meta.json", JSON.json(Dict("valid_parents" => Dict(eachrow(dfo)))))
+
+
+# using H3.Lib
+# verts = [Lib.GeoCoord(0,50), Lib.GeoCoord(-1, 50), Lib.GeoCoord(0, 51)]
+# geofence = Lib.Geofence(
+#     Cint(3),
+#     pointer(verts),
+# )
+# poly = Lib.GeoPolygon(geofence, Cint(0), pointer([]))
+# Lib.polyfill
+# len = Lib.maxPolyfillSize(poly, 7)
+# h3s = Vector{Lib.H3Index}(undef, len)
+
+
+
+# tiff2arrow
+using GeoArrays, Proj
+mollweide2latlon = Proj.Transformation("ESRI:54009", "EPSG:4326", always_xy=true) # always_xy => lon/lat order
+ghs = GeoArrays.read("ghs/GHS_POP_E2020_GLOBE_R2023A_54009_100_V1_0.tif", masked=false) # masked=false memmaps it
+t = GeoArrays.coords(ghs, (100_000,100_000))
+filter(i -> ghs[i] >= 0, Iterators.partition(eachindex(ghs), 1000*1000) |> first)
+
+using ThreadsX
+s = size(ghs)[1:2]
+a = 1:20000:s[1] |> collect
+b =  1:20000:s[2] |> collect
+xs = map(z -> range(z...), zip(a[1:end-1], a[2:end].-1))# |> collect # misses off the very row/col but who cares
+ys = map(z -> range(z...), zip(b[1:end-1], b[2:end].-1))# |> collect # misses off the very row/col but who cares
+
+coords = Iterators.product(xs,ys) |> collect
+
+using ProgressMeter
+using Dates
+@showprogress for (i,c) in enumerate(coords) # is @showprogress forcing it to be single threaded? no, something else
+    this_ghs = ghs[c...]
+    nonzeroes = ThreadsX.findall(p -> p > 0.0, this_ghs) # exclude both no data and true zeroes 
+    length(nonzeroes) == 0 && continue
+    df = DataFrame(ThreadsX.map(c -> (mollweide2latlon(GeoArrays.coords(this_ghs, c.I[1:2]))..., this_ghs[c]), nonzeroes), [:lon, :lat, :pop]) # about 100 seconds per coordinate partition
+    Arrow.write("arrow/part$i.arrow", df, compress=:zstd)
+end
+
+# gdal_translate -of XYZ GHS_POP_E2020_GLOBE_R2023A_54009_100_V1_0.tif ghs.csv # single threaded but better? who knows
+
+# gdal_translate -of XYZ GHS_POP_E2020_GLOBE_R2023A_54009_100_V1_0.tif /vsistdout | awk '$3 != -200' > ghs.csv # skip nodata,
+# absurdly slow (ran for four hours and got ~1/4 of the way through), julia does it in 20 minutes
+
+
+
+# conversion to h3
+using Tables, TableOperations, Arrow, DataFrames, StatsBase
+import H3.API: kRing, geoToH3, GeoCoord, h3ToParent
+# df = Tables.partitioner(DataFrame∘Arrow.Table, "arrow/".*readdir("arrow/")) |> TableOperations.joinpartitions |> DataFrame # not sure this is memmapped
+df = DataFrame(Arrow.Table("arrow/".*readdir("arrow/")[10])) # [10] is ~fiji
+# df = DataFrame(Arrow.Table("arrow/part51.arrow")) # too big
+
+df.h3 = geoToH3.(GeoCoord.(deg2rad.(df.lat), deg2rad.(df.lon)), 11) # h3 11 approx right res for 100m^2
+
+# bug: lone 100m squares surrounded by 0 population get made bigger
+rings = flatten(DataFrame(mapreduce(k->map(h -> (centre=h, h3=kRing(h, k), dist=k+1,), df.h3), vcat, 0:2)), :h3) # slow - multithread?
+leftjoin!(rings, df, on=:centre=>:h3)
+
+df2 = combine(groupby(rings, :h3), [:dist, :pop] => ((d, p) -> mean(p, weights(1 ./ (d.^3)))) => :pop)
+df2.index = string.(df2.h3, base=16)
+
+addquantiles!(df, column; jiggle=false) = begin
+    if (!jiggle) 
+        raw = ecdf(df[!, column]).(df[!, column])
+        raw = raw .- minimum(raw)
+        raw = raw ./ maximum(raw)
+        return df[!, Symbol(string(column) * "_quantile")] = raw
+    end
+    l = size(df,1)
+    tdf = copy(df[!, [column]])
+    tdf.id = 1:l
+    sort!(tdf, column)
+    tdf.q = (1:l)./l
+    sort!(tdf, :id)
+    return df[!, Symbol(string(column) * "_quantile")] = tdf.q
+end
+
+addquantiles!(df2, :pop)
+df2.value = df2.pop_quantile
+
+using CSV
+CSV.write("../H3-MON/www/data/h3_data.csv", df2[!, [:index, :value, :pop]])
+# http://localhost:1983/#x=178.47055156540932&y=-18.11339853004901&z=12.399161459599881 - fiji
