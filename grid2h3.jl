@@ -136,7 +136,18 @@ dfo = combine(groupby(df4, :res), df -> begin
 # )
 # do line :38 again
 # then store in metadata with "chunk_size" => (res => [parent res, radius])
-write("../H3-MON/www/data/JRC_POPULATION_2018_H3_by_rnd/meta.json", JSON.json(Dict("valid_parents" => Dict(eachrow(dfo)))))
+
+using Interpolations
+"Get actual-value scale from normalised values, fudging 0/1"
+function dictscale(df, normalised, actual)
+    d = @view df[.!nonunique(df, normalised, keep=:first), [normalised, actual]]
+    sort!(d, normalised)
+    f = linear_interpolation(d[!,normalised], d[!,actual], extrapolation_bc=Flat())
+    Dict("scale" => Dict(zip([0, 0.2, 0.4, 0.6, 0.8, 1], round.(f.([0.0001, 0.2, 0.4, 0.6, 0.8, 0.9999]), sigdigits=2))))
+end
+
+using Random: shuffle
+write("../H3-MON/www/data/JRC_POPULATION_2018_H3_by_rnd/meta.json", JSON.json(merge(Dict("valid_parents" => Dict(eachrow(dfo))), dictscale(df4[shuffle(1:nrow(df4))[1:100000], :], :value, :real_value))))
 
 
 # using H3.Lib
@@ -153,13 +164,13 @@ write("../H3-MON/www/data/JRC_POPULATION_2018_H3_by_rnd/meta.json", JSON.json(Di
 
 
 # tiff2arrow
-using GeoArrays, Proj
+using GeoArrays, Proj, Arrow, DataFrames
 mollweide2latlon = Proj.Transformation("ESRI:54009", "EPSG:4326", always_xy=true) # always_xy => lon/lat order
 ghs = GeoArrays.read("ghs/GHS_POP_E2020_GLOBE_R2023A_54009_100_V1_0.tif", masked=false) # masked=false memmaps it
 t = GeoArrays.coords(ghs, (100_000,100_000))
 filter(i -> ghs[i] >= 0, Iterators.partition(eachindex(ghs), 1000*1000) |> first)
 
-using ThreadsX
+#using ThreadsX
 s = size(ghs)[1:2]
 a = 1:20000:s[1] |> collect
 b =  1:20000:s[2] |> collect
@@ -172,10 +183,10 @@ using ProgressMeter
 using Dates
 @showprogress for (i,c) in enumerate(coords) # is @showprogress forcing it to be single threaded? no, something else
     this_ghs = ghs[c...]
-    nonzeroes = ThreadsX.findall(p -> p > 0.0, this_ghs) # exclude both no data and true zeroes 
+    nonzeroes = findall(p -> p > 0.0, this_ghs) # exclude both no data and true zeroes 
     length(nonzeroes) == 0 && continue
-    df = DataFrame(ThreadsX.map(c -> (mollweide2latlon(GeoArrays.coords(this_ghs, c.I[1:2]))..., this_ghs[c]), nonzeroes), [:lon, :lat, :pop]) # about 100 seconds per coordinate partition
-    Arrow.write("arrow/part$i.arrow", df, compress=:zstd)
+    df = DataFrame(map(c -> (mollweide2latlon(GeoArrays.coords(this_ghs, c.I[1:2]))..., this_ghs[c]), nonzeroes), [:lon, :lat, :pop]) # about 100 seconds per coordinate partition
+    Arrow.write("arrow_nocompress/part$i.arrow", df)#, compress=:zstd) # pretty sure compression means we can't memory map
 end
 
 # gdal_translate -of XYZ GHS_POP_E2020_GLOBE_R2023A_54009_100_V1_0.tif ghs.csv # single threaded but better? who knows
@@ -186,13 +197,15 @@ end
 
 
 # conversion to h3
-using Tables, TableOperations, Arrow, DataFrames, StatsBase
+using Tables, TableOperations, Arrow, DataFrames, StatsBase, ThreadsX
 import H3.API: kRing, geoToH3, GeoCoord, h3ToParent
-# df = Tables.partitioner(DataFrame∘Arrow.Table, "arrow/".*readdir("arrow/")) |> TableOperations.joinpartitions |> DataFrame # not sure this is memmapped
+df = Tables.partitioner(Arrow.Table, "arrow/".*readdir("arrow/")) |> TableOperations.joinpartitions |> DataFrame # to mmap it _must not_ be compressed (disk based is fine)
+GC.gc()
 df = DataFrame(Arrow.Table("arrow/".*readdir("arrow/")[10])) # [10] is ~fiji
 # df = DataFrame(Arrow.Table("arrow/part51.arrow")) # too big
 
 df.h3 = geoToH3.(GeoCoord.(deg2rad.(df.lat), deg2rad.(df.lon)), 11) # h3 11 approx right res for 100m^2
+df.h3 = ThreadsX.map(p -> geoToH3(GeoCoord(deg2rad(p[1]), deg2rad(p[2])), 11), zip(df.lat, df.lon)) # ok but once we do this what is the next step, like, where are you going to write it?
 
 # bug: lone 100m squares surrounded by 0 population get made bigger
 rings = flatten(DataFrame(mapreduce(k->map(h -> (centre=h, h3=kRing(h, k), dist=k+1,), df.h3), vcat, 0:2)), :h3) # slow - multithread?
