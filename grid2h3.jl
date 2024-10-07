@@ -1,6 +1,6 @@
 using Shapefile, DataFrames, Statistics, RollingFunctions, Proj, ThreadsX, StatsBase, CSV
 import H3
-import H3.API: kRing, geoToH3, GeoCoord, h3ToParent
+import H3.API: kRing, geoToH3, GeoCoord, h3ToParent, hexAreaKm2
 
 
 "Add [column]_quantile to a dataframe"
@@ -55,6 +55,10 @@ df2.res .= 9
 df2.h3_7 = h3ToParent.(df2.h3, 7)
 df2.h3_5 = h3ToParent.(df2.h3, 5)
 
+# i think we need to have a total_pop field which is population density * area
+# then here we still take mean population density? not sure. but we need some kind of population density
+# but definitely sum total_pop
+# then on the frontend we weight all our medians by population and not by density
 h3_7s = combine(groupby(df2, :h3_7), :TOT_P_2018 => mean => :TOT_P_2018, :res => (x->7) => :res, :CNTR_ID => first => :CNTR_ID)
 rename!(h3_7s, :h3_7 => :h3)
 h3_5s = combine(groupby(df2, :h3_5), :TOT_P_2018 => mean => :TOT_P_2018, :res => (x->5) => :res, :CNTR_ID => first => :CNTR_ID)
@@ -236,3 +240,27 @@ df2.value = df2.pop_quantile
 using CSV
 CSV.write("../H3-MON/www/data/h3_data.csv", df2[!, [:index, :value, :pop]])
 # http://localhost:1983/#x=178.47055156540932&y=-18.11339853004901&z=12.399161459599881 - fiji
+
+
+# trying to fix up the lower resolutions
+df4 = readhivedir("../H3-MON/www/data/JRC_POPULATION_2018_H3_by_rnd")
+df4.h3 = parse.(UInt64, df4.index, base=16)
+df4.population = df4.real_value .* hexAreaKm2.(parse.(Int,df4.res))
+df9 = df4[df4.res .== "9", :]
+df9.h3_7 = h3ToParent.(df9.h3, 7)
+df9.h3_7 = h3ToParent.(df9.h3, 5)
+
+# df_test = combine(groupby(df9, :h3_7), :population => sum => :population)
+# df7 = df4[df4.res .== "7", :]
+# leftjoin!(df7, df_test, on=:h3=>:h3_7, makeunique=true) # so it's a pretty big overestimate
+
+# df7.pop_density = df7.population_1 ./ hexAreaKm2.(7)
+df7 = combine(groupby(df9, :h3_7), :population => sum => :population)
+df5 = combine(groupby(df9, :h3_7), :population => sum => :population)
+df5.real_value = df5.population ./ hexAreaKm2.(5)
+df7.real_value = df7.population ./ hexAreaKm2.(7)
+
+
+# this doesn't work :(
+#
+# i think we probably need to go back to the source file and use the "true" h3 tiles without the kRing interpolation
