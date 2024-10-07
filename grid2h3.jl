@@ -125,7 +125,7 @@ end
 
 
 # get valid parents to avoid 404
-df4 = readhivedir("../H3-MON/www/data/JRC_POPULATION_2018_H3_by_rnd")
+df4 = readhivedir("../population-around-a-tile/map/data/JRC_POPULATION_2018_H3_by_rnd/")
 
 using JSON
 dfo = combine(groupby(df4, :res), df -> begin
@@ -151,7 +151,7 @@ function dictscale(df, normalised, actual)
 end
 
 using Random: shuffle
-write("../H3-MON/www/data/JRC_POPULATION_2018_H3_by_rnd/meta.json", JSON.json(merge(Dict("valid_parents" => Dict(eachrow(dfo))), dictscale(df4[shuffle(1:nrow(df4))[1:100000], :], :value, :real_value))))
+write("../population-around-a-tile/map/data/JRC_POPULATION_2018_H3_by_rnd/meta.json", JSON.json(merge(Dict("valid_parents" => Dict(eachrow(dfo))), dictscale(df4[shuffle(1:nrow(df4))[1:100000], :], :value, :real_value))))
 
 
 # using H3.Lib
@@ -243,6 +243,15 @@ CSV.write("../H3-MON/www/data/h3_data.csv", df2[!, [:index, :value, :pop]])
 
 
 # trying to fix up the lower resolutions
+function writehivedir2(outdir, df, groupkeys=[]; filename="part0.arrow") # arquero doesn't support zstd
+    g = groupby(df, groupkeys)
+    for t in keys(g)
+        !all(v -> >:(AbstractString, typeof(v)), values(t)) && throw("All grouped column values must be strings") # TODO: support other types?
+        path = join(["$k=$v" for (k,v) in zip(keys(t), values(t))], "/")
+        mkpath(joinpath(outdir,path))
+        Arrow.write(joinpath(outdir,path,filename), g[t][!, Not(keys(t))])
+    end
+end
 df4 = readhivedir("../H3-MON/www/data/JRC_POPULATION_2018_H3_by_rnd")
 df4.h3 = parse.(UInt64, df4.index, base=16)
 df4.population = df4.real_value .* hexAreaKm2.(parse.(Int,df4.res))
@@ -264,3 +273,44 @@ df7.real_value = df7.population ./ hexAreaKm2.(7)
 # this doesn't work :(
 #
 # i think we probably need to go back to the source file and use the "true" h3 tiles without the kRing interpolation
+table = Shapefile.Table("./data/JRC_POPULATION_2018.shp")
+
+df = DataFrame(table)
+
+# geostat is CRS3035
+
+eu2latlon = Proj.Transformation("EPSG:3035", "EPSG:4326")
+
+# eu2latlon(3215009.376512329, 3597518.130827671) # output is definitely lat/lon
+
+point2latlon(p) = eu2latlon(p.y, p.x)
+points2mid(ps) = (getfield.(ps, 1), getfield.(ps, 2)) .|> mean
+
+df.midpoint = ThreadsX.map(ps -> points2mid(point2latlon.(ps)), getfield.(df[!, :geometry], :points)) # threadsx was overkill for this it was stupid quick
+
+mini_df = copy(df[!, [:midpoint, :TOT_P_2018, :OBJECTID, :CNTR_ID]]) 
+# run this for 7 and then 5
+mini_df.h3_7  = map(m -> geoToH3(GeoCoord(deg2rad.(m)...), 7), mini_df.midpoint)
+consolidated = combine(groupby(mini_df, :h3_7), :TOT_P_2018 => sum => :population, :TOT_P_2018 => mean => :TOT_P_2018, :CNTR_ID => first => :CNTR_ID)
+sort!(consolidated, :TOT_P_2018)
+consolidated.pop_quantile = cumsum(consolidated.TOT_P_2018) ./ sum(consolidated.TOT_P_2018)
+consolidated.value = consolidated.pop_quantile
+consolidated.real_value = consolidated.TOT_P_2018
+consolidated.h3_3 = string.(h3ToParent.(consolidated.h3_7, 3), base=16)
+consolidated.index = string.(consolidated.h3_7, base=16)
+# change 7 to 5 when needed
+writehivedir2("../population-around-a-tile/map/data/JRC_POPULATION_2018_H3_by_rnd/res=7/", consolidated[!, [:index, :value, :real_value, :population, :h3_3]], [:h3_3])
+
+
+# updating population for res=9
+df9 = readhivedir("../population-around-a-tile/map/data/JRC_POPULATION_2018_H3_by_rnd/res=9/")
+df9.population = df9.real_value .* hexAreaKm2.(parse.(Int,df9.res))
+# DON'T WRITE TO THE SAME DIRECTORY
+writehivedir2("../population-around-a-tile/map/data/JRC_POPULATION_2018_H3_by_rnd/res=9_2/", df9[!, [:index, :value, :real_value, :population, :h3_3]], [:h3_3])
+
+
+# how did these end up ints
+df9 = readhivedir("../population-around-a-tile/map/data/JRC_POPULATION_2018_H3_by_rnd/res=5/")
+df9.population = Float64.(df9.population)
+# DON'T WRITE TO THE SAME DIRECTORY
+writehivedir2("../population-around-a-tile/map/data/JRC_POPULATION_2018_H3_by_rnd/res=5_2/", df9[!, [:index, :value, :real_value, :population, :h3_3]], [:h3_3])
