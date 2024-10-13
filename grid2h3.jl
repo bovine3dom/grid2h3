@@ -129,7 +129,8 @@ df4 = readhivedir("../population-around-a-tile/map/data/JRC_POPULATION_2018_H3_b
 
 using JSON
 dfo = combine(groupby(df4, :res), df -> begin
-        Ref(unique(df.h3_3))
+        Ref(unique(df.h3_parent))
+        # Ref(unique(df.h3_3))
     end)
 
 # want to aim for ~30 per region
@@ -314,3 +315,13 @@ df9 = readhivedir("../population-around-a-tile/map/data/JRC_POPULATION_2018_H3_b
 df9.population = Float64.(df9.population)
 # DON'T WRITE TO THE SAME DIRECTORY
 writehivedir2("../population-around-a-tile/map/data/JRC_POPULATION_2018_H3_by_rnd/res=5_2/", df9[!, [:index, :value, :real_value, :population, :h3_3]], [:h3_3])
+
+# swap h3_3 for h3_1
+df9 = readhivedir("../population-around-a-tile/map/data/JRC_POPULATION_2018_H3_by_rnd/res=5/")
+df9.h3_parent = string.(h3ToParent.(parse.(UInt64, df9.index, base=16), 1), base=16)
+combine(groupby(df9, :h3_1), nrow)
+writehivedir2("../population-around-a-tile/map/data/JRC_POPULATION_2018_H3_by_rnd/res=5_2/", df9[!, [:index, :value, :real_value, :population, :h3_parent]], [:h3_parent])
+
+df = readhivedir("../population-around-a-tile/map/data/JRC_POPULATION_2018_H3_by_rnd/")
+df.h3_parent = df.h3_3
+writehivedir2("../population-around-a-tile/map/data/jrc2/", df[!, [:index, :value, :real_value, :population, :h3_parent, :res]], [:res, :h3_parent])
